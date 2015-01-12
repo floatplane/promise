@@ -40,9 +40,11 @@ private:
         std::deque<ResultHandler> _ResultHandlers;
         optional<ResultType> _Result;
     public:
-        void Resolve(const ResultType & result)
+        void _Resolve(const ResultType & result)
         {
             std::lock_guard<std::mutex> lock(_Mutex);
+            _State = State::Fulfilled;
+            _Result = result;
             for (auto handler : _ResultHandlers)
             {
                 handler(result);
@@ -50,20 +52,17 @@ private:
             _ResultHandlers.clear();
         }
 
-        template <typename ResultType2>
-        Promise<ResultType2> Then(std::function<ResultType2(const ResultType &)> func)
+        void _Then(std::function<void(const ResultType &)> func)
         {
-            Promise<ResultType2> chainedResult;
             std::lock_guard<std::mutex> lock(_Mutex);
-            _ResultHandlers.emplace_back([=](const ResultType & result) {
-                func(result);
-                // chainedResult.Resolve(func(result));
-            });
-            return chainedResult;
+            _ResultHandlers.emplace_back(func);
         }
 
     };
     std::shared_ptr<InternalState> _State;
+
+    // Intentionally not implemented. Used in decltype expressions below.
+    const ResultType & ResultTypeExpression();
 
 public:
     // A default constructed promise
@@ -78,18 +77,22 @@ public:
     :
     Promise()
     {
-        _State->Resolve(result);
+        _State->_Resolve(result);
     }
 
     void Resolve(const ResultType & result)
     {
-        _State->Resolve(result);
+        _State->_Resolve(result);
     }
     
-    template <typename ResultType2>
-    Promise<ResultType2> Then(std::function<ResultType2(const ResultType &)> func)
+    template <typename FuncType>
+    auto Then(FuncType func) -> Promise<decltype(func(ResultTypeExpression()))>
     {
-        return _State->Then(func);
+        Promise<decltype(func(ResultTypeExpression()))> chainedResult;
+        _State->_Then([=](const ResultType & result) mutable {
+            chainedResult.Resolve(func(result));
+        });
+        return chainedResult;
     }
 
 private:
